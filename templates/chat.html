@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat | DaBlog</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+</head>
+<body class="chat-mode">
+
+<div class="chat-header-bar">
+    <div style="display: flex; align-items: center; gap: 15px;">
+        {% if target_username %}
+            <button class="icon-btn" onclick="window.location='/chat'">◀ Back</button>
+            <div class="chat-header"><b>@{{ target_username }}</b></div>
+        {% else %}
+            <button class="icon-btn hide-on-mobile" onclick="window.location='/feed'">◀ Feed</button>
+            <div class="chat-header"><b>Direct Messages</b></div>
+        {% endif %}
+    </div>
+    <div class="brand" onclick="window.location='/feed'" style="cursor:pointer;">DaBlog.</div>
+</div>
+
+<div class="chat-container">
+    {% if not target_username %}
+        <div class="dm-list-container">
+            <div id="dm-list-main">
+                <div style="text-align: center; margin-top: 50px; color: var(--muted);">Loading conversations...</div>
+            </div>
+        </div>
+    {% else %}
+        <div class="chat-main">
+            <div id="chat-messages" class="messages-container">
+                </div>
+        
+            <form id="chat-form" class="chat-input-wrap" onsubmit="sendPrivateMessage(event)">
+                <input type="text" id="chat-input" placeholder="Type a message..." required autocomplete="off">
+                <button type="submit" class="btn-primary">Send</button>
+            </form>
+        </div>
+    {% endif %}
+</div>
+
+{% if not target_username %}
+<div class="mobile-footer">
+    <a href="/feed">🏠</a>
+    <a href="#" onclick="searchPeople()">🔍</a>
+    <a href="/chat">💬</a>
+</div>
+{% endif %}
+<script src="/static/core.js"></script>
+<script>
+let currentTargetId = null;
+let eventSource = null;
+let lastMessageCount = 0; // Track message count to prevent redundant scrolls
+const initialTarget = "{{ target_username or '' }}";
+const currentUserId = {{ session.user_id or 'null' }};
+
+async function initChatPage() {
+    if (initialTarget && initialTarget !== 'None' && initialTarget !== '') {
+        try {
+            const res = await fetch(`/api/user_by_name/${initialTarget}`);
+            const data = await res.json();
+            if (data.id) {
+                await loadChatHistory(data.id);
+                
+                // START REAL-TIME POLLING (Fallback if SSE is shaky)
+                setInterval(() => pollMessages(data.id), 3000); 
+            }
+        } catch (err) {
+            console.error("User fetch error:", err);
+        }
+    } else {
+        // Load Main DM List
+        try {
+            const res = await fetch('/api/dm_list');
+            const data = await res.json();
+            const list = document.getElementById('dm-list-main');
+            
+            if (!data.users || data.users.length === 0) {
+                list.innerHTML = '<div style="text-align:center; padding:50px; color:var(--muted);">No conversations yet. Start one from the feed!</div>';
+                return;
+            }
+
+            list.innerHTML = data.users.map(u => `
+                <a href="/chat/${u.username}" class="dm-item">
+                    <div class="dm-icon">${u.username[0].toUpperCase()}</div>
+                    <div class="dm-info">
+                        <div class="dm-name" style="opacity: 1; visibility: visible; width: auto; font-size: 1.1em;"><b>@${u.username}</b></div>
+                        <div class="dm-last-msg" style="font-size: 0.85rem; color: var(--muted); margin-top: 4px; margin-left: 15px;">
+                            ${u.last_msg || 'Start chatting...'}
+                        </div>
+                    </div>
+                </a>
+            `).join('');
+        } catch (err) {
+            console.error("Error loading DM list:", err);
+        }
+    }
+}
+
+// 1. POLLING FALLBACK (The "It just works" method)
+async function pollMessages(id) {
+    try {
+        const res = await fetch(`/api/get_messages/${id}`);
+        const data = await res.json();
+        const container = document.getElementById('chat-messages');
+        
+        // Only update if the number of messages has changed
+        if (data.messages && data.messages.length > lastMessageCount) {
+            container.innerHTML = ""; // Clear and re-render
+            data.messages.forEach(m => {
+                const isSent = m.sender_id == currentUserId;
+                appendMessage(m.content, isSent ? 'sent' : 'received', false); // false = don't animate every single one
+            });
+            lastMessageCount = data.messages.length;
+            scrollToBottom();
+        }
+    } catch (err) {
+        console.error("Polling error:", err);
+    }
+}
+
+async function loadChatHistory(id) {
+    currentTargetId = id;
+    try {
+        const res = await fetch(`/api/get_messages/${id}`);
+        const data = await res.json();
+        const container = document.getElementById('chat-messages');
+        container.innerHTML = "";
+        
+        if (data.messages && data.messages.length > 0) {
+            lastMessageCount = data.messages.length;
+            data.messages.forEach(m => {
+                const isSent = m.sender_id == currentUserId;
+                appendMessage(m.content, isSent ? 'sent' : 'received', false);
+            });
+            scrollToBottom();
+        } else {
+            container.innerHTML = `<div id="no-msg" style="text-align: center; margin-top: 50px; color: var(--muted);">No messages yet. Say hi!</div>`;
+        }
+        // You can keep setupSSE() here if your server supports it, 
+        // but polling above will act as the safety net.
+    } catch (err) {
+        console.error("History fetch error:", err);
+    }
+}
+
+// 2. IMPROVED APPEND (With scroll control)
+function appendMessage(text, type, shouldScroll = true) {
+    const container = document.getElementById('chat-messages');
+    
+    // Remove "No messages" text if it exists
+    const noMsg = document.getElementById('no-msg');
+    if (noMsg) noMsg.remove();
+
+    const msg = document.createElement('div');
+    msg.className = `msg ${type}`;
+    msg.innerText = text;
+    container.appendChild(msg);
+    
+    if (shouldScroll) {
+        scrollToBottom();
+    }
+}
+
+function scrollToBottom() {
+    const container = document.getElementById('chat-messages');
+    container.scrollTop = container.scrollHeight;
+}
+
+async function sendPrivateMessage(e) {
+    e.preventDefault();
+    const input = document.getElementById('chat-input');
+    const content = input.value.trim();
+    if (!content || !currentTargetId) return;
+
+    // Optimistic UI: Show message immediately
+    appendMessage(content, 'sent');
+    lastMessageCount++; 
+    
+    const formData = new FormData();
+    formData.append('receiver_id', currentTargetId);
+    formData.append('content', content);
+
+    input.value = ''; 
+    
+    try {
+        await fetch('/api/send_message', { method: 'POST', body: formData });
+    } catch (err) {
+        console.error("Send failed:", err);
+    }
+}
+
+window.onload = initChatPage;
+</script>
+</body>
+</html>

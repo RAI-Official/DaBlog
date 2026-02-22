@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Edit Post</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+
+<div class="top-bar">
+    <div class="brand">DaBlog.</div>
+</div>
+
+<h1>Edit post | DaBlog</h1>
+
+<form method="post">
+
+    <div class="format-bar">
+        <button type="button" onclick="wrap('[b]', '[/b]')"><b>B</b></button>
+        <button type="button" onclick="wrap('[i]', '[/i]')"><i>I</i></button>
+        <button type="button" onclick="wrap('[u]', '[/u]')"><u>U</u></button>
+        <button type="button" onclick="wrap('[s]', '[/s]')"><s>S</s></button>
+        <span class="divider"></span>
+        <button type="button" onclick="wrap('[size=medium]', '[/size]')">M</button>
+        <button type="button" onclick="wrap('[size=large]', '[/size]')">L</button>
+        <button type="button" onclick="removeFormatting()">✕</button>
+    </div>
+
+    <!-- CONTENT -->
+    <textarea id="post-content"
+              name="content"
+              required>{{ post.content }}</textarea>
+
+    <div class="form-row">
+
+        <!-- VISIBILITY -->
+        <div class="segmented-control" id="visibility">
+            <button type="button"
+                    data-value="1"
+                    class="{% if post.is_public %}active{% endif %}"
+                    onclick="setVisibility(this)">
+                Public
+            </button>
+        
+            <button type="button"
+                    data-value="0"
+                    class="{% if not post.is_public %}active{% endif %}"
+                    onclick="setVisibility(this)">
+                Private
+            </button>
+        </div>
+        
+        <input type="hidden"
+               id="is-public"
+               name="is_public"
+               value="{{ 1 if post.is_public else 0 }}">
+
+        <button type="submit">Save</button>
+        <a href="/feed" class="form-link">Cancel</a>
+    </div>
+
+</form>
+
+</body>
+</html>
+
+<script src="/static/core.js"></script>
+<script>
+function wrap(start, end) {
+    const ta = document.getElementById("post-content");
+    const s = ta.selectionStart;
+    const e = ta.selectionEnd;
+
+    ta.value =
+        ta.value.substring(0, s) +
+        start +
+        ta.value.substring(s, e) +
+        end +
+        ta.value.substring(e);
+
+    ta.focus();
+    ta.selectionStart = s + start.length;
+    ta.selectionEnd = e + start.length;
+}
+
+function setVisibility(btn) {
+    const value = btn.dataset.value;
+
+    // set hidden input
+    document.getElementById("is-public").value = value;
+
+    // toggle active class correctly
+    document.querySelectorAll("#visibility button").forEach(b => {
+        b.classList.toggle("active", b === btn);
+    });
+}
+
+// auto-grow textarea
+document.querySelectorAll("textarea").forEach(t => {
+    t.style.height = "auto";
+    t.style.height = t.scrollHeight + "px";
+    t.addEventListener("input", () => {
+        t.style.height = "auto";
+        t.style.height = t.scrollHeight + "px";
+    });
+});
+</script>

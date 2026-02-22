@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login | DaBlog</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<div class="top-bar">
+    <div class="brand">DaBlog.</div>
+</div>
+
+<div class="auth-container">
+    <h2>Login</h2>
+
+    <!-- The form submits to your backend -->
+    <form method="post">
+        <input name="username" placeholder="Username" required autocomplete="username">
+        <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
+        <button class="btn-primary">Login</button>
+    </form>
+
+    <div style="margin-top: 20px;">
+        <a href="/signup" class="link-secondary">Sign up</a>
+    </div>
+</div>
+
+<!-- ===== CUSTOM MODALS & TOASTS ===== -->
+<div id="custom-modal" class="modal-overlay">
+    <div class="modal-box">
+        <div class="modal-title" id="modal-title"></div>
+        <div class="modal-body" id="modal-body"></div>
+        <div id="modal-input-container" style="display:none;">
+            <input type="text" id="modal-input" class="modal-input" autocomplete="off">
+        </div>
+        <div class="modal-actions">
+            <button id="modal-cancel" class="btn-ghost">Cancel</button>
+            <button id="modal-confirm" class="btn-primary">OK</button>
+        </div>
+    </div>
+</div>
+
+<div id="toast-container"></div>
+
+</body>
+</html>
+
+<script src="/static/core.js"></script>
+<script>
+// Initialization and Error Handling
+(function () {
+    const saved = localStorage.getItem("theme");
+    if (saved) setTheme(saved);
+
+    // This captures the 'error' variable passed from Flask
+    // If Flask sends: render_template('login.html', error="Wrong password")
+    // Jinja will replace this with that string.
+    const serverError = "{{ error|e }}";
+    
+    if (serverError && serverError !== "" && serverError !== "None") {
+        // We use the 'error' type for the toast to make it red/noticeable
+        showToast(serverError, 'error');
+    }
+})();
+</script>
