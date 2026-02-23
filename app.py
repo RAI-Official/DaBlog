@@ -1,23 +1,22 @@
 from flask import Flask, render_template, request, redirect, session, Response, jsonify
-import sqlite3
+import psycopg2
 import hashlib
 from datetime import datetime, timezone, timedelta
 import html
 import re
 import json 
 import time 
-
-app = Flask(__name__)
-app.secret_key = "super_secret_key"  # fine for friends-only
-
 import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(BASE_DIR, "database.db")
+app = Flask(__name__)
+# Get secret key from environment variable in Vercel, fallback to default for local dev
+app.secret_key = os.getenv("SECRET_KEY", "super_secret_key") 
 
+# --- DATABASE SETUP ---
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db():
-    return sqlite3.connect(DB)
+    return psycopg2.connect(DATABASE_URL)
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
@@ -25,7 +24,7 @@ def hash_password(password):
 def is_admin_user(user_id):
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT username FROM users WHERE id=?", (user_id,))
+    cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
     row = cur.fetchone()
     db.close()
     return row and row[0] == "Raulnistel"
@@ -39,7 +38,7 @@ def login():
         db = get_db()
         cur = db.cursor()
         cur.execute(
-            "SELECT id FROM users WHERE username=? AND password=? AND is_deleted=0",
+            "SELECT id FROM users WHERE username=%s AND password=%s AND is_deleted=0",
             (username, password)
         )
 
@@ -51,7 +50,6 @@ def login():
             session["username"] = username
             return redirect("/feed")
         else:
-            # Pass the error message back to the login.html template
             return render_template("login.html", error="Invalid username or password")
 
     return render_template("login.html")
@@ -65,16 +63,13 @@ def signup():
         db = get_db()
         cur = db.cursor()
 
-        cur.execute("SELECT 1 FROM users WHERE username=?", (username,))
+        cur.execute("SELECT 1 FROM users WHERE username=%s", (username,))
         if cur.fetchone():
             db.close()
-            return render_template(
-                "signup.html",
-                error="Username already exists"
-            )
+            return render_template("signup.html", error="Username already exists")
 
         cur.execute(
-            "INSERT INTO users (username, password) VALUES (?, ?)",
+            "INSERT INTO users (username, password) VALUES (%s, %s)",
             (username, password)
         )
 
@@ -98,7 +93,7 @@ def send_message():
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "INSERT INTO messages (sender_id, receiver_id, content) VALUES (?, ?, ?)",
+        "INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)",
         (session["user_id"], receiver_id, content)
     )
     db.commit()
@@ -106,12 +101,11 @@ def send_message():
     return {"success": True}
 
 @app.route("/chat")
-@app.route("/chat/<username>") # Add this to handle /chat/dummyuser
+@app.route("/chat/<username>") 
 def chat_page(username=None):
     if "user_id" not in session:
         return redirect("/")
     
-    # We pass the username from the URL to the template
     return render_template("chat.html", 
                            current_username=session.get("username"),
                            target_username=username)
@@ -124,20 +118,18 @@ def get_dm_list():
     db = get_db()
     cur = db.cursor()
     
-    # This query finds everyone the user has exchanged messages with
-    # and gets the very last message content for the preview
     cur.execute("""
         SELECT u.id, u.username, 
                (SELECT content FROM messages 
-                WHERE (sender_id = u.id AND receiver_id = ?) 
-                   OR (sender_id = ? AND receiver_id = u.id)
+                WHERE (sender_id = u.id AND receiver_id = %s) 
+                   OR (sender_id = %s AND receiver_id = u.id)
                 ORDER BY id DESC LIMIT 1) as last_msg
         FROM users u
         WHERE u.id IN (
-            SELECT DISTINCT sender_id FROM messages WHERE receiver_id = ?
+            SELECT DISTINCT sender_id FROM messages WHERE receiver_id = %s
             UNION
-            SELECT DISTINCT receiver_id FROM messages WHERE sender_id = ?
-        ) AND u.id != ?
+            SELECT DISTINCT receiver_id FROM messages WHERE sender_id = %s
+        ) AND u.id != %s
     """, (session["user_id"], session["user_id"], session["user_id"], session["user_id"], session["user_id"]))
     
     users = [{"id": row[0], "username": row[1], "last_msg": row[2]} for row in cur.fetchall()]
@@ -155,9 +147,8 @@ def search_users():
 
     db = get_db()
     cur = db.cursor()
-    # Fuzzy search using LIKE with wildcards
     cur.execute(
-        "SELECT id, username FROM users WHERE username LIKE ? AND is_deleted = 0 AND id != ? LIMIT 10",
+        "SELECT id, username FROM users WHERE username ILIKE %s AND is_deleted = 0 AND id != %s LIMIT 10",
         (f"%{query}%", session["user_id"])
     )
     users = [{"id": row[0], "username": row[1]} for row in cur.fetchall()]
@@ -173,12 +164,11 @@ def get_messages(other_id):
     db = get_db()
     cur = db.cursor()
     
-    # Fetch conversation between the two users
     cur.execute("""
         SELECT sender_id, content, id 
         FROM messages 
-        WHERE (sender_id = ? AND receiver_id = ?) 
-           OR (sender_id = ? AND receiver_id = ?)
+        WHERE (sender_id = %s AND receiver_id = %s) 
+           OR (sender_id = %s AND receiver_id = %s)
         ORDER BY id ASC
     """, (user_id, other_id, other_id, user_id))
     
@@ -192,7 +182,7 @@ def get_messages(other_id):
 def user_by_name(username):
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id, username FROM users WHERE username = ?", (username,))
+    cur.execute("SELECT id, username FROM users WHERE username = %s", (username,))
     row = cur.fetchone()
     db.close()
     if row:
@@ -203,7 +193,7 @@ def user_by_name(username):
 def user_by_id(user_id):
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id, username FROM users WHERE id = ?", (user_id,))
+    cur.execute("SELECT id, username FROM users WHERE id = %s", (user_id,))
     row = cur.fetchone()
     db.close()
     if row:
@@ -219,35 +209,34 @@ def stream_messages():
 
     def event_stream():
         last_id = 0
-        # Initialize last_id with the current highest message ID
         db = get_db()
         cur = db.cursor()
-        cur.execute("SELECT MAX(id) FROM messages WHERE receiver_id = ?", (user_id,))
+        cur.execute("SELECT MAX(id) FROM messages WHERE receiver_id = %s", (user_id,))
         row = cur.fetchone()
         if row and row[0]:
             last_id = row[0]
         db.close()
 
         while True:
-            time.sleep(2) # Check every 2 seconds
+            time.sleep(2) 
+            # Very important to close connection in the loop to avoid hitting limits
             db = get_db()
-            cur = db.cursor()
-            # Look for messages newer than the last one seen
-            cur.execute("""
-                SELECT m.id, m.content, u.username 
-                FROM messages m 
-                JOIN users u ON m.sender_id = u.id 
-                WHERE m.receiver_id = ? AND m.id > ? 
-                ORDER BY m.id ASC
-            """, (user_id, last_id))
-            
-            new_messages = cur.fetchall()
-            db.close()
-
-            for msg_id, content, sender in new_messages:
-                last_id = msg_id
-                # Only yield when there is an actual message
-                yield f"data: {json.dumps({'sender': sender})}\n\n"
+            try:
+                cur = db.cursor()
+                cur.execute("""
+                    SELECT m.id, m.content, u.username 
+                    FROM messages m 
+                    JOIN users u ON m.sender_id = u.id 
+                    WHERE m.receiver_id = %s AND m.id > %s 
+                    ORDER BY m.id ASC
+                """, (user_id, last_id))
+                
+                new_messages = cur.fetchall()
+                for msg_id, content, sender in new_messages:
+                    last_id = msg_id
+                    yield f"data: {json.dumps({'sender': sender})}\n\n"
+            finally:
+                db.close()
 
     return Response(event_stream(), mimetype="text/event-stream")
 
@@ -259,8 +248,9 @@ def create_post():
     db = get_db()
     cur = db.cursor()
     
-    cur.execute("SELECT is_muted FROM users WHERE id=?", (session["user_id"],))
-    if cur.fetchone()[0]:
+    cur.execute("SELECT is_muted FROM users WHERE id=%s", (session["user_id"],))
+    row = cur.fetchone()
+    if row and row[0]:
         db.close()
         return {"error": "muted"}, 403
     
@@ -270,33 +260,33 @@ def create_post():
         question = request.form.get("question", "").strip()
         options = request.form.getlist("options[]")
         options = [o.strip() for o in options if o.strip()]
-      
+       
         if not question:
             return {"error": "Poll question required"}, 400
-      
+       
         if len(options) < 2 or len(options) > 5:
             return {"error": "Poll must have 2–5 options"}, 400
-      
-        # 1️⃣ create post
+       
+        # 1️⃣ create post (RETURNING id for PostgreSQL)
         cur.execute(
-            "INSERT INTO posts (user_id, content, created_at, is_public, type) VALUES (?, '', ?, 1, 'poll')",
+            "INSERT INTO posts (user_id, content, created_at, is_public, type) VALUES (%s, '', %s, 1, 'poll') RETURNING id",
             (session["user_id"], datetime.now(timezone.utc))
         )
-        post_id = cur.lastrowid
-      
+        post_id = cur.fetchone()[0]
+       
         # 2️⃣ create poll
         cur.execute(
-            "INSERT INTO polls (post_id, question) VALUES (?, ?)",
+            "INSERT INTO polls (post_id, question) VALUES (%s, %s)",
             (post_id, question)
         )
-      
+       
         # 3️⃣ create options
         for opt in options:
             cur.execute(
-                "INSERT INTO poll_options (post_id, option_text) VALUES (?, ?)",
+                "INSERT INTO poll_options (post_id, option_text) VALUES (%s, %s)",
                 (post_id, opt)
             )
-      
+       
         db.commit()
         db.close()
         return {
@@ -304,30 +294,29 @@ def create_post():
             "post_count": get_post_count(session["user_id"])
         }
 
-
-
-
     # TEXT POST
     content = request.form["content"]
 
     cur.execute(
-        "INSERT INTO posts (user_id, content, created_at, is_public, type) VALUES (?, ?, ?, 1, 'text')",
+        "INSERT INTO posts (user_id, content, created_at, is_public, type) VALUES (%s, %s, %s, 1, 'text') RETURNING id",
         (session["user_id"], content, datetime.now(timezone.utc))
     )
-    post_id = cur.lastrowid
+    post_id = cur.fetchone()[0]
     db.commit()
 
     cur.execute("""
         SELECT posts.id, users.username, posts.created_at
         FROM posts
         JOIN users ON posts.user_id = users.id
-        WHERE posts.id = ?
+        WHERE posts.id = %s
     """, (post_id,))
     row = cur.fetchone()
     db.close()
 
     IST = timezone(timedelta(hours=5, minutes=30))
-    pretty_time = datetime.fromisoformat(row[2]).astimezone(IST).strftime("%d/%m/%Y - %I:%M %p").lower()
+    # Ensure datetime format matches what's returned from PostgreSQL
+    dt_obj = datetime.fromisoformat(str(row[2])) if isinstance(row[2], str) else row[2]
+    pretty_time = dt_obj.astimezone(IST).strftime("%d/%m/%Y - %I:%M %p").lower()
 
     return {
         "id": post_id,
@@ -366,7 +355,7 @@ def vote(option_id):
     cur = db.cursor()
 
     # find poll
-    cur.execute("SELECT post_id FROM poll_options WHERE id=?", (option_id,))
+    cur.execute("SELECT post_id FROM poll_options WHERE id=%s", (option_id,))
     row = cur.fetchone()
     if not row:
         db.close()
@@ -376,7 +365,7 @@ def vote(option_id):
 
     # did user already vote THIS option?
     cur.execute(
-        "SELECT 1 FROM poll_votes WHERE user_id=? AND option_id=?",
+        "SELECT 1 FROM poll_votes WHERE user_id=%s AND option_id=%s",
         (user_id, option_id)
     )
     already_voted = cur.fetchone()
@@ -384,7 +373,7 @@ def vote(option_id):
     if already_voted:
         # 🔁 toggle OFF
         cur.execute(
-            "DELETE FROM poll_votes WHERE user_id=? AND option_id=?",
+            "DELETE FROM poll_votes WHERE user_id=%s AND option_id=%s",
             (user_id, option_id)
         )
         action = "removed"
@@ -392,15 +381,15 @@ def vote(option_id):
         # ❌ remove previous vote in THIS poll
         cur.execute("""
             DELETE FROM poll_votes
-            WHERE user_id=?
+            WHERE user_id=%s
             AND option_id IN (
-                SELECT id FROM poll_options WHERE post_id=?
+                SELECT id FROM poll_options WHERE post_id=%s
             )
         """, (user_id, post_id))
 
         # ✅ add new vote
         cur.execute(
-            "INSERT INTO poll_votes (user_id, option_id) VALUES (?, ?)",
+            "INSERT INTO poll_votes (user_id, option_id) VALUES (%s, %s)",
             (user_id, option_id)
         )
         action = "voted"
@@ -410,10 +399,10 @@ def vote(option_id):
         SELECT
             po.id,
             COUNT(pv.user_id) AS votes,
-            MAX(pv.user_id = ?) AS voted_by_me
+            MAX(CASE WHEN pv.user_id = %s THEN 1 ELSE 0 END) AS voted_by_me
         FROM poll_options po
         LEFT JOIN poll_votes pv ON pv.option_id = po.id
-        WHERE po.post_id=?
+        WHERE po.post_id=%s
         GROUP BY po.id
     """, (user_id, post_id))
 
@@ -443,26 +432,26 @@ def like(post_id):
     cur = db.cursor()
 
     cur.execute(
-        "SELECT 1 FROM likes WHERE user_id=? AND post_id=?",
+        "SELECT 1 FROM likes WHERE user_id=%s AND post_id=%s",
         (session["user_id"], post_id)
     )
     liked = cur.fetchone()
 
     if liked:
         cur.execute(
-            "DELETE FROM likes WHERE user_id=? AND post_id=?",
+            "DELETE FROM likes WHERE user_id=%s AND post_id=%s",
             (session["user_id"], post_id)
         )
         action = "unliked"
     else:
         cur.execute(
-            "INSERT INTO likes (user_id, post_id) VALUES (?, ?)",
+            "INSERT INTO likes (user_id, post_id) VALUES (%s, %s)",
             (session["user_id"], post_id)
         )
         action = "liked"
 
     cur.execute(
-        "SELECT COUNT(*) FROM likes WHERE post_id=?",
+        "SELECT COUNT(*) FROM likes WHERE post_id=%s",
         (post_id,)
     )
     like_count = cur.fetchone()[0]
@@ -511,10 +500,7 @@ def feed():
     db = get_db()
     cur = db.cursor()
 
-    # cur.execute("SELECT username FROM users WHERE id=?", (session["user_id"],))
-    # current_username = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM posts WHERE user_id=?", (session["user_id"],))
+    cur.execute("SELECT COUNT(*) FROM posts WHERE user_id=%s", (session["user_id"],))
     post_count = cur.fetchone()[0]
 
     cur.execute("""
@@ -532,14 +518,13 @@ def feed():
             posts.created_at,
             posts.is_public,
             COUNT(likes.post_id),
-            MAX(likes.user_id = ?) AS liked
+            MAX(CASE WHEN likes.user_id = %s THEN 1 ELSE 0 END) AS liked
         FROM posts
         LEFT JOIN users ON posts.user_id = users.id
         LEFT JOIN likes ON posts.id = likes.post_id
-        WHERE posts.is_public = 1 OR posts.user_id = ?
-        GROUP BY posts.id
+        WHERE posts.is_public = 1 OR posts.user_id = %s
+        GROUP BY posts.id, users.is_deleted, users.id, users.username
         ORDER BY posts.created_at DESC
-
     """, (session["user_id"], session["user_id"]))
 
     rows = cur.fetchall()
@@ -554,7 +539,9 @@ def feed():
             created_at, is_public,
             likes, liked
         ) = r
-        pretty_time = datetime.fromisoformat(created_at).astimezone(IST).strftime("%d/%m/%Y - %I:%M %p").lower()
+        
+        dt_obj = datetime.fromisoformat(str(created_at)) if isinstance(created_at, str) else created_at
+        pretty_time = dt_obj.astimezone(IST).strftime("%d/%m/%Y - %I:%M %p").lower()
 
         post = {
             "id": post_id,
@@ -564,12 +551,12 @@ def feed():
             "time": pretty_time,
             "is_public": is_public,
             "like_count": likes,
-            "liked_by_me": liked,
+            "liked_by_me": bool(liked),
             "is_admin": is_admin_user(user_id)
         }
         post["is_deleted_user"] = bool(is_deleted)
         if ptype == "poll":
-            cur.execute("SELECT question FROM polls WHERE post_id=?", (post_id,))
+            cur.execute("SELECT question FROM polls WHERE post_id=%s", (post_id,))
             post["question"] = cur.fetchone()[0]
         
             cur.execute("""
@@ -577,10 +564,10 @@ def feed():
                     po.id,
                     po.option_text,
                     COUNT(pv.user_id) AS votes,
-                    MAX(pv.user_id = ?) AS voted_by_me
+                    MAX(CASE WHEN pv.user_id = %s THEN 1 ELSE 0 END) AS voted_by_me
                 FROM poll_options po
                 LEFT JOIN poll_votes pv ON pv.option_id = po.id
-                WHERE po.post_id=?
+                WHERE po.post_id=%s
                 GROUP BY po.id
             """, (session["user_id"], post_id))
         
@@ -629,12 +616,12 @@ def edit_post(post_id):
 
     if is_admin_user(session["user_id"]):
         cur.execute(
-            "SELECT id, content, is_public FROM posts WHERE id=?",
+            "SELECT id, content, is_public FROM posts WHERE id=%s",
             (post_id,)
         )
     else:
         cur.execute(
-            "SELECT id, content, is_public FROM posts WHERE id=? AND user_id=?",
+            "SELECT id, content, is_public FROM posts WHERE id=%s AND user_id=%s",
             (post_id, session["user_id"])
         )
 
@@ -652,10 +639,10 @@ def edit_post(post_id):
 
     if request.method == "POST":
         new_content = request.form["content"]
-        is_public = int(request.form["is_public"])  # 👈 FIXED NAME
+        is_public = int(request.form["is_public"])
 
         cur.execute(
-            "UPDATE posts SET content=?, is_public=? WHERE id=?",
+            "UPDATE posts SET content=%s, is_public=%s WHERE id=%s",
             (new_content, is_public, post_id)
         )
         db.commit()
@@ -673,7 +660,7 @@ def delete_post(post_id):
     db = get_db()
     cur = db.cursor()
 
-    cur.execute("SELECT user_id, type FROM posts WHERE id=?", (post_id,))
+    cur.execute("SELECT user_id, type FROM posts WHERE id=%s", (post_id,))
     post = cur.fetchone()
 
     if not post:
@@ -685,22 +672,22 @@ def delete_post(post_id):
         return {"error": "forbidden"}, 403
 
     # delete likes
-    cur.execute("DELETE FROM likes WHERE post_id=?", (post_id,))
+    cur.execute("DELETE FROM likes WHERE post_id=%s", (post_id,))
 
     if post_type == "poll":
         # delete votes → options → poll
         cur.execute("""
             DELETE FROM poll_votes
             WHERE option_id IN (
-                SELECT id FROM poll_options WHERE post_id=?
+                SELECT id FROM poll_options WHERE post_id=%s
             )
         """, (post_id,))
 
-        cur.execute("DELETE FROM poll_options WHERE post_id=?", (post_id,))
-        cur.execute("DELETE FROM polls WHERE post_id=?", (post_id,))
+        cur.execute("DELETE FROM poll_options WHERE post_id=%s", (post_id,))
+        cur.execute("DELETE FROM polls WHERE post_id=%s", (post_id,))
 
     # finally delete post
-    cur.execute("DELETE FROM posts WHERE id=?", (post_id,))
+    cur.execute("DELETE FROM posts WHERE id=%s", (post_id,))
 
     db.commit()
     db.close()
@@ -716,7 +703,7 @@ def get_user_profile(username):
     cur = db.cursor()
 
     cur.execute(
-        "SELECT id, username, is_muted FROM users WHERE username=? AND is_deleted=0",
+        "SELECT id, username, is_muted FROM users WHERE username=%s AND is_deleted=0",
         (username,)
     )
 
@@ -726,7 +713,7 @@ def get_user_profile(username):
 
     user_id = user[0]
 
-    cur.execute("SELECT COUNT(*) FROM posts WHERE user_id=?", (user_id,))
+    cur.execute("SELECT COUNT(*) FROM posts WHERE user_id=%s", (user_id,))
     post_count = cur.fetchone()[0]
 
     cur.execute("""
@@ -738,7 +725,7 @@ def get_user_profile(username):
             COUNT(l.post_id) AS likes
         FROM posts p
         LEFT JOIN likes l ON l.post_id = p.id
-        WHERE p.user_id=?
+        WHERE p.user_id=%s
         GROUP BY p.id
         ORDER BY p.created_at DESC
     """, (user_id,))
@@ -749,26 +736,25 @@ def get_user_profile(username):
 
     for r in rows:
         post_id, content, created_at, ptype, likes = r
-        time = datetime.fromisoformat(created_at)\
-            .astimezone(IST)\
-            .strftime("%d/%m/%Y - %I:%M %p").lower()
+        dt_obj = datetime.fromisoformat(str(created_at)) if isinstance(created_at, str) else created_at
+        time_str = dt_obj.astimezone(IST).strftime("%d/%m/%Y - %I:%M %p").lower()
 
         post = {
             "id": post_id,
             "type": ptype,
-            "time": time,
+            "time": time_str,
             "like_count": likes
         }
 
         if ptype == "poll":
-            cur.execute("SELECT question FROM polls WHERE post_id=?", (post_id,))
+            cur.execute("SELECT question FROM polls WHERE post_id=%s", (post_id,))
             post["question"] = cur.fetchone()[0]
 
             cur.execute("""
                 SELECT option_text, COUNT(pv.user_id)
                 FROM poll_options po
                 LEFT JOIN poll_votes pv ON pv.option_id = po.id
-                WHERE po.post_id=?
+                WHERE po.post_id=%s
                 GROUP BY po.id
             """, (post_id,))
             post["options"] = [
@@ -801,7 +787,7 @@ def toggle_mute(user_id):
     db = get_db()
     cur = db.cursor()
 
-    cur.execute("SELECT is_muted FROM users WHERE id=?", (user_id,))
+    cur.execute("SELECT is_muted FROM users WHERE id=%s", (user_id,))
     row = cur.fetchone()
     if not row:
         db.close()
@@ -809,7 +795,7 @@ def toggle_mute(user_id):
 
     new_state = 0 if row[0] else 1
     cur.execute(
-        "UPDATE users SET is_muted=? WHERE id=?",
+        "UPDATE users SET is_muted=%s WHERE id=%s",
         (new_state, user_id)
     )
 
@@ -849,7 +835,7 @@ def admin_panel():
         JOIN users u ON p.user_id = u.id
         LEFT JOIN likes l ON l.post_id = p.id
         WHERE p.is_public = 0
-        GROUP BY p.id
+        GROUP BY p.id, u.username
         ORDER BY p.created_at DESC
     """)
     IST = timezone(timedelta(hours=5, minutes=30))
@@ -857,28 +843,27 @@ def admin_panel():
     
     for r in cur.fetchall():
         post_id, content, created_at, ptype, username, likes = r
-        time = datetime.fromisoformat(created_at)\
-            .astimezone(IST)\
-            .strftime("%d/%m/%Y - %I:%M %p").lower()
+        dt_obj = datetime.fromisoformat(str(created_at)) if isinstance(created_at, str) else created_at
+        time_str = dt_obj.astimezone(IST).strftime("%d/%m/%Y - %I:%M %p").lower()
     
         post = {
             "id": post_id,
             "type": ptype,
             "username": username,
-            "time": time,
+            "time": time_str,
             "like_count": likes,
             "readonly": True
         }
     
         if ptype == "poll":
-            cur.execute("SELECT question FROM polls WHERE post_id=?", (post_id,))
+            cur.execute("SELECT question FROM polls WHERE post_id=%s", (post_id,))
             post["question"] = cur.fetchone()[0]
     
             cur.execute("""
                 SELECT option_text, COUNT(pv.user_id)
                 FROM poll_options po
                 LEFT JOIN poll_votes pv ON pv.option_id = po.id
-                WHERE po.post_id=?
+                WHERE po.post_id=%s
                 GROUP BY po.id
             """, (post_id,))
     
@@ -890,8 +875,6 @@ def admin_panel():
             post["content"] = render_post(content)
     
         private_posts.append(post)
-
-  #  private_posts = cur.fetchall()
 
     db.close()
 
@@ -911,8 +894,9 @@ def add_curse():
 
     db = get_db()
     cur = db.cursor()
+    # PostgreSQL equivalent of "INSERT OR IGNORE"
     cur.execute(
-        "INSERT OR IGNORE INTO curse_words(word) VALUES (?)",
+        "INSERT INTO curse_words(word) VALUES (%s) ON CONFLICT (word) DO NOTHING",
         (word,)
     )
     db.commit()
@@ -935,9 +919,8 @@ def change_username():
     db = get_db()
     cur = db.cursor()
 
-    # verify password first
     cur.execute(
-        "SELECT password FROM users WHERE id=?",
+        "SELECT password FROM users WHERE id=%s",
         (session["user_id"],)
     )
     row = cur.fetchone()
@@ -946,9 +929,8 @@ def change_username():
         db.close()
         return {"error": "wrong password"}, 403
 
-    # prevent duplicates
     cur.execute(
-        "SELECT 1 FROM users WHERE username=?",
+        "SELECT 1 FROM users WHERE username=%s",
         (new_username,)
     )
     if cur.fetchone():
@@ -956,7 +938,7 @@ def change_username():
         return {"error": "username already taken"}, 400
 
     cur.execute(
-        "UPDATE users SET username=? WHERE id=?",
+        "UPDATE users SET username=%s WHERE id=%s",
         (new_username, session["user_id"])
     )
 
@@ -981,9 +963,8 @@ def change_password():
     db = get_db()
     cur = db.cursor()
 
-    # fetch stored hash
     cur.execute(
-        "SELECT password FROM users WHERE id=?",
+        "SELECT password FROM users WHERE id=%s",
         (session["user_id"],)
     )
     row = cur.fetchone()
@@ -992,14 +973,12 @@ def change_password():
         db.close()
         return {"error": "user not found"}, 404
 
-    # 🔐 hash OLD password before compare
     if row[0] != hash_password(old):
         db.close()
         return {"error": "wrong password"}, 403
 
-    # 🔐 hash NEW password before saving
     cur.execute(
-        "UPDATE users SET password=? WHERE id=?",
+        "UPDATE users SET password=%s WHERE id=%s",
         (hash_password(new), session["user_id"])
     )
 
@@ -1014,16 +993,15 @@ def delete_account():
 
     user_id = session["user_id"]
     db = get_db()
-    cur = db.cursor()
+    cur = cursor()
 
-    # preserve username before deletion
     cur.execute(
         """
         UPDATE users
          SET is_deleted = 1,
              deleted_username = username,
              username = NULL
-         WHERE id = ?
+         WHERE id = %s
          """,
         (user_id,)
     )
@@ -1042,7 +1020,7 @@ def logout():
 def get_post_count(user_id):
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT COUNT(*) FROM posts WHERE user_id=?", (user_id,))
+    cur.execute("SELECT COUNT(*) FROM posts WHERE user_id=%s", (user_id,))
     count = cur.fetchone()[0]
     db.close()
     return count
