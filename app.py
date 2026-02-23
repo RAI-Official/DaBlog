@@ -523,7 +523,16 @@ def feed():
         LEFT JOIN users ON posts.user_id = users.id
         LEFT JOIN likes ON posts.id = likes.post_id
         WHERE posts.is_public = 1 OR posts.user_id = %s
-        GROUP BY posts.id, users.is_deleted, users.id, users.username
+        GROUP BY 
+            posts.id, 
+            posts.user_id, 
+            posts.content, 
+            posts.type, 
+            users.is_deleted, 
+            users.id, 
+            users.username, 
+            posts.created_at, 
+            posts.is_public
         ORDER BY posts.created_at DESC
     """, (session["user_id"], session["user_id"]))
 
@@ -568,7 +577,7 @@ def feed():
                 FROM poll_options po
                 LEFT JOIN poll_votes pv ON pv.option_id = po.id
                 WHERE po.post_id=%s
-                GROUP BY po.id
+                GROUP BY po.id, po.option_text
             """, (session["user_id"], post_id))
         
             options = []
@@ -1027,3 +1036,4 @@ def get_post_count(user_id):
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0')
+
